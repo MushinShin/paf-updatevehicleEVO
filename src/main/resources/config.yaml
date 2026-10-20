@@ -1,0 +1,23 @@
+http:
+  host: "0.0.0.0"
+  port: "8081"
+
+salesforce:
+  username: "usuariointegraciones@grupopurdy.gp"
+  password: "1d5KmeVF3P6SADASD@2313123d!"
+  securityToken: "YSRrAeV9MJ8yoPsffiADKtg0"
+  url: "https://login.salesforce.com/services/Soap/u/60.0"
+  
+cdc:
+  channel: "/data/VehicleDefinitionChangeEvent"
+  colorChannel: "/data/PAF_Color__ChangeEvent"
+  extrasChannel: "/data/PAF_Extra_Vehiculo__ChangeEvent"
+
+softland:
+  host: "gpapimanagement-integrations.azure-api.net"
+  basePath: "/EIH-Vehicles"
+  username: "eih_svc_prod"
+  password: "Xk9#mN2$pL7!vQ4@wZ6%rT1&bY8*uC3^hJ0"
+
+api:
+  id: "99999999" # Modificado para EVO para evitar colision

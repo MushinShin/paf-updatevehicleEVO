@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns:os="http://www.mulesoft.org/schema/mule/os"
+	xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd">
+	<sub-flow name="subflow-softland-login" doc:id="5a1d91ad-67a3-47ec-99dd-9e574bfa91ed" >
+		<os:retrieve doc:id="ff874efc-9158-4a60-9004-a203caae7c9c" key="softlandToken" objectStore="Softland_Token_Object_Store" target="softlandToken" doc:name="Retrieve Token" >
+			<os:default-value ><![CDATA[#[""]]]></os:default-value>
+		</os:retrieve>
+		<choice doc:name="Choice Token Exists?" doc:id="e08d2d34-14f8-4d09-8a25-748d78cc1621" >
+			<when expression="#[vars.softlandToken == '']" >
+				<ee:transform doc:name="Set Logger Start Auth" doc:id="9d2c56ab-24c1-46d1-a004-135416b0ffc1" >
+					<ee:message />
+					<ee:variables >
+						<ee:set-variable variableName="system" ><![CDATA[%dw 2.0
+output application/java
+---
+"Softland"]]></ee:set-variable>
+						<ee:set-variable variableName="operation" ><![CDATA[%dw 2.0
+output application/java
+---
+"LOGIN"]]></ee:set-variable>
+						<ee:set-variable variableName="logStatus" ><![CDATA[%dw 2.0
+output application/java
+---
+"START"]]></ee:set-variable>
+						<ee:set-variable variableName="logMessage" ><![CDATA[%dw 2.0
+output application/java
+---
+"Iniciando autenticacion en Softland"]]></ee:set-variable>
+						<ee:set-variable variableName="logPayload" ><![CDATA[%dw 2.0
+output application/java
+---
+false]]></ee:set-variable>
+					</ee:variables>
+				</ee:transform>
+				<flow-ref doc:name="Invoke Generic Logger Start" doc:id="5cd2ef86-a91a-43b9-9439-01f5c919f1dd" name="subflow-generic-logger" />
+				<ee:transform doc:name="Create Login Payload" doc:id="968e372b-2f35-43e4-85c4-54bf7a3438cc" >
+					<ee:message >
+						<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+{
+	"username": p('softland.username'),
+	"password": p('softland.password')
+}]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+				<http:request doc:name="Request Softland Login" doc:id="19ff047a-e7f3-4d3b-b801-9ffaf3630fc4" config-ref="Softland_HTTP_Request_configuration" method="POST" path="/api/Security/login" />
+				<ee:transform doc:name="Set Token Variable" doc:id="aee1ce6c-1894-42ec-80b4-4a67932107e6" >
+					<ee:message />
+					<ee:variables >
+						<ee:set-variable variableName="softlandToken" ><![CDATA[%dw 2.0
+output application/java
+---
+payload.data.token]]></ee:set-variable>
+					</ee:variables>
+				</ee:transform>
+				<os:store doc:id="c3922c71-413c-40d2-9ae8-1f6558e19693" key="softlandToken" objectStore="Softland_Token_Object_Store" doc:name="Store Token" >
+					<os:value ><![CDATA[#[vars.softlandToken]]]></os:value>
+				</os:store>
+				<ee:transform doc:name="Set Logger End Auth" doc:id="1c6bea86-4b75-4773-8123-80beb1f1e028" >
+					<ee:message />
+					<ee:variables >
+						<ee:set-variable variableName="logStatus" ><![CDATA[%dw 2.0
+output application/java
+---
+"END"]]></ee:set-variable>
+						<ee:set-variable variableName="logMessage" ><![CDATA[%dw 2.0
+output application/java
+---
+"Autenticacion exitosa y token cacheado"]]></ee:set-variable>
+						<ee:set-variable variableName="logPayload" ><![CDATA[%dw 2.0
+output application/java
+---
+false]]></ee:set-variable>
+					</ee:variables>
+				</ee:transform>
+				<flow-ref doc:name="Invoke Generic Logger End" doc:id="75e5f86c-181a-459f-b993-4db0ef2c7fff" name="subflow-generic-logger" />
+			</when>
+			<otherwise >
+				<ee:transform doc:name="Set Logger Cached" doc:id="a14ffb0c-17dc-45db-bff9-0227af2bbe69" >
+					<ee:message />
+					<ee:variables >
+						<ee:set-variable variableName="system" ><![CDATA[%dw 2.0
+output application/java
+---
+"Softland"]]></ee:set-variable>
+						<ee:set-variable variableName="operation" ><![CDATA[%dw 2.0
+output application/java
+---
+"LOGIN"]]></ee:set-variable>
+						<ee:set-variable variableName="logStatus" ><![CDATA[%dw 2.0
+output application/java
+---
+"INFO"]]></ee:set-variable>
+						<ee:set-variable variableName="logMessage" ><![CDATA[%dw 2.0
+output application/java
+---
+"Usando token JWT desde Cache"]]></ee:set-variable>
+						<ee:set-variable variableName="logPayload" ><![CDATA[%dw 2.0
+output application/java
+---
+false]]></ee:set-variable>
+					</ee:variables>
+				</ee:transform>
+				<flow-ref doc:name="Invoke Generic Logger Cache" doc:id="34c26464-63f2-4c41-acd7-2d2ebdcf3f57" name="subflow-generic-logger" />
+			</otherwise>
+		</choice>
+	</sub-flow>
+</mule>

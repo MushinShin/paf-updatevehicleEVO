@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http"
+	xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:os="http://www.mulesoft.org/schema/mule/os"
+	xmlns:vm="http://www.mulesoft.org/schema/mule/vm"
+	xmlns:api-gateway="http://www.mulesoft.org/schema/mule/api-gateway"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd 
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
+http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd
+http://www.mulesoft.org/schema/mule/api-gateway http://www.mulesoft.org/schema/mule/api-gateway/current/mule-api-gateway.xsd
+http://www.mulesoft.org/schema/mule/vm http://www.mulesoft.org/schema/mule/vm/current/mule-vm.xsd">
+	
+	<!-- <api-gateway:autodiscovery apiId="${api.id}" ignoreBasePath="true" doc:name="API Autodiscovery" flowRef="paf-createvehicle-main-flow" /> -->
+
+	<configuration-properties file="config.yaml" doc:name="Configuration properties" />
+
+	<os:object-store name="Softland_Token_Object_Store" doc:name="Object store" entryTtl="55" entryTtlUnit="MINUTES" maxEntries="1" expirationInterval="5" />
+
+
+	
+	<http:listener-config name="HTTP_Listener_config" doc:name="HTTP Listener config" basePath="/api">
+		<http:listener-connection host="${http.host}" port="${http.port}" />
+	</http:listener-config>
+
+	<http:request-config name="Softland_HTTP_Request_configuration" doc:name="HTTP Request configuration" basePath="${softland.basePath}">
+		<http:request-connection host="${softland.host}" protocol="HTTPS" />
+	</http:request-config>
+	
+
+	<salesforce:sfdc-config name="Salesforce_Config" doc:name="Salesforce Config" doc:id="29febea4-7c54-4c85-b806-f7054f72cef5" >
+		<salesforce:basic-connection username="${salesforce.username}" password="${salesforce.password}" securityToken="${salesforce.securityToken}" url="${salesforce.url}" />
+	</salesforce:sfdc-config>
+
+	<vm:config name="VM_Config" doc:name="VM Config" doc:id="vm-config-001" >
+		<vm:queues >
+			<vm:queue queueName="vehicle-retry-queue" queueType="PERSISTENT" />
+		</vm:queues>
+	</vm:config>
+
+	<error-handler name="global-error-handler">
+		<on-error-continue enableNotifications="true" logException="true" doc:name="On Error Continue" type="ANY">
+			<logger level="ERROR" doc:name="Log Error" message="#[payload]"/>
+			<set-payload value='#[%dw 2.0&#10;output application/json&#10;---&#10;{&#10;  "status": "error",&#10;  "message": error.description default "Internal Server Error"&#10;}]' doc:name="Set Error Payload"/>
+		</on-error-continue>
+	</error-handler>
+</mule>

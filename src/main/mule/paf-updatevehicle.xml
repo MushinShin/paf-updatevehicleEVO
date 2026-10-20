@@ -1,0 +1,444 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns:vm="http://www.mulesoft.org/schema/mule/vm"
+	xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd 
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/vm http://www.mulesoft.org/schema/mule/vm/current/mule-vm.xsd
+http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd">
+
+	<!-- ============================================================
+	     1. Compatibility Flow for /UnidadesNuevasAVehicle path
+	     ============================================================ -->
+	<flow name="paf-createvehicle-compatibility-flow" doc:id="comp-flow-001" >
+		<http:listener doc:name="Listener POST /UnidadesNuevasAVehicle" doc:id="comp-listener-001" config-ref="HTTP_Listener_config" path="/UnidadesNuevasAVehicle" allowedMethods="POST"/>
+		<flow-ref doc:name="Route to Main Flow" doc:id="route-to-main" name="paf-createvehicle-main-flow"/>
+	</flow>
+
+	<!-- ============================================================
+	     2. Main Flow for POST /UpdateVehicle
+	     ============================================================ -->
+	<flow name="paf-createvehicle-main-flow" doc:id="f91d8a8b-1e2a-4c2d-9b5a-1b2c3d4e5f6a" >
+		<http:listener doc:name="Listener POST /UpdateVehicle" doc:id="12345678-abcd-1234-abcd-123456789abc" config-ref="HTTP_Listener_config" path="/UpdateVehicle" allowedMethods="POST"/>
+
+		<logger level="INFO" doc:name="LOG - Payload recibido de Softland" message="#['>>> [UPDATEVEHICLE] Payload recibido de Softland: ' ++ write(payload, 'application/json')]" />
+
+		<ee:transform doc:name="Save Softland Payload" doc:id="23456789-bcde-2345-bcde-23456789abcd" >
+			<ee:message >
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="softlandPayload" ><![CDATA[%dw 2.0
+output application/json
+---
+payload]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+
+		<!-- ============================================================
+		     2a. Validation - Status picklist values check
+		     ============================================================ -->
+		<choice doc:name="Validate Status Value" doc:id="choice-val-status" >
+			<when expression="#[vars.softlandPayload.pEstado == null or (['V', 'T', 'F', 'L', 'S', 'ST'] contains trim(vars.softlandPayload.pEstado as String))]">
+				<logger level="DEBUG" doc:name="LOG - Status is valid" message=">>> [UPDATEVEHICLE] Estado es válido o nulo." />
+			</when>
+			<otherwise >
+				<logger level="ERROR" doc:name="LOG - Invalid Status" message="#['>>> [UPDATEVEHICLE] Estado inválido recibido: ' ++ (vars.softlandPayload.pEstado default 'null')]" />
+				<raise-error doc:name="Raise Invalid Status Error" doc:id="raise-err-001" type="APP:INVALID_STATUS" description="El estado enviado no es válido. Debe ser una de las letras: V, T, F, L, S, ST."/>
+			</otherwise>
+		</choice>
+
+		<!-- ============================================================
+		     2b. Query to see if vehicle already exists in Salesforce
+		     ============================================================ -->
+		<logger level="INFO" doc:name="LOG - Consultando Vehiculo" message="#['>>> [UPDATEVEHICLE] Consultando en SF si existe vehiculo con unidad: ' ++ (vars.softlandPayload.pUnidad default 'N/A')]" />
+		
+		<set-variable variableName="failedIntegration" value="Query Vehiculo Existente" doc:name="Set Integration Name - Query" />
+		
+		<salesforce:query doc:name="Query Existing Vehicle" doc:id="query-veh-001" config-ref="Salesforce_Config" target="existingVehicles">
+			<salesforce:salesforce-query ><![CDATA[SELECT Id FROM Vehicle WHERE VehicleIdentificationNumber = ':unidad' LIMIT 1]]></salesforce:salesforce-query>
+			<salesforce:parameters ><![CDATA[#[output application/java
+---
+{
+	"unidad" : vars.softlandPayload.unidadTarjeta
+}]]]></salesforce:parameters>
+		</salesforce:query>
+
+		<!-- ============================================================
+		     2c. Choice - Create or Update Vehicle in Salesforce
+		     ============================================================ -->
+		<choice doc:name="Exists?" doc:id="choice-veh-001" >
+			<when expression="#[sizeOf(vars.existingVehicles default []) &gt; 0]">
+				<logger level="INFO" doc:name="LOG - Vehiculo Encontrado" message="#['>>> [UPDATEVEHICLE] Vehiculo encontrado en SF. Actualizando recordId: ' ++ vars.existingVehicles[0].Id]" />
+				<set-variable variableName="failedIntegration" value="Update Vehicle" doc:name="Set Integration Name - Update" />
+				
+				<ee:transform doc:name="Map Update Payload" doc:id="map-update-veh">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+output application/java
+var raw = vars.softlandPayload
+---
+[{
+	Id: vars.existingVehicles[0].Id,
+	Name: raw.nombreProducto default raw.unidadTarjeta,
+	ChassisNumber: raw.vinChasis,
+	EngineNumber: raw.motor,
+	ExteriorColor: raw.colorExterno,
+	InteriorColor: raw.colorInterno,
+	LastOdometerReading: if (raw.odometro != null and raw.odometro != "") (raw.odometro as Number) else null,
+	CylinderCount: if (raw.cilindros != null and raw.cilindros != "") (raw.cilindros as String) else null,
+	GearBoxType: if(raw.transmision != null) (upper(raw.transmision) match {
+		case "A" -> "Automatica"
+		case "M" -> "Manual"
+		else -> raw.transmision
+	}) else null,
+	PAF_Fecha_Llegada_Real__c: if (raw.fechaLlegadaReal != null and raw.fechaLlegadaReal != "") (raw.fechaLlegadaReal as Date) else null,
+	PAF_Fecha_Llegada_Estimada__c: if (raw.fechaLlegada != null and raw.fechaLlegada != "") (raw.fechaLlegada as Date) else null,
+	PAF_Fecha_puerta__c: do {
+		var f = raw.fechaDesalmacenaje default raw.fechaPuerta default raw.fecha_puerta
+		---
+		if (f != null and trim(f as String) != "") (
+			if (sizeOf(f as String) >= 10) (f as String)[0 to 9] as Date else (f as Date)
+		) else null
+	},
+	
+	// Nuevos Mapeos
+	PAF_unidadTarjeta__c: raw.unidadTarjeta,
+	PAF_tipo_vehiculo__c: raw.tipoVehiculo,
+	//MakeName: raw.marca,
+	PAF_Subtipo_de_Vehiculo__c: raw.subTipoVehiculo,
+	VehicleRegistrationNumber: raw.placa,
+	// ModelYear eliminado porque es de solo lectura en Salesforce
+	FST_TransmissionType__c: if(raw.transmision != null) (upper(raw.transmision) match {
+		case "A" -> "Automatica"
+		case "M" -> "Manual"
+		else -> raw.transmision
+	}) else null,
+	PAF_estado_unidades__c: raw.pEstado default raw.estado,
+	PAF_precio__c: if (raw.precio != null and raw.precio != "") (raw.precio as Number) else null,
+	PAF_preiciosinIVA__c: if (raw.preciosinIVA != null and raw.preciosinIVA != "") (raw.preciosinIVA as Number) else null,
+	PAF_precioPromocional__c: if (raw.precioPromocional != null and raw.precioPromocional != "") (raw.precioPromocional as Number) else null,
+	PAF_costo__c: if (raw.costo != null and raw.costo != "") (raw.costo as Number) else null,
+	PAF_sucursal__c: raw.sucursal,
+	PAF_ubicacion__c: raw.ubicacion,
+	PAF_vendedorRecibe__c: raw.vendedorRecibe,
+	PAF_fechaRegistro__c: if (raw.fechaRegistro != null and raw.fechaRegistro != "") (raw.fechaRegistro as Date) else null,
+	PAF_fechaLlegada__c: if (raw.fechaLlegada != null and raw.fechaLlegada != "") (raw.fechaLlegada as Date) else null,
+	PAF_codigoTipoPedido__c: raw.codigoTipoPedido,
+	PAF_descripTipoPedido__c: raw.descripTipoPedido,
+	PAF_extrasPedido__c: raw.extrasPedido,
+	PAF_costoExtrasPedido__c: if (raw.costoExtrasPedido != null and raw.costoExtrasPedido != "") (raw.costoExtrasPedido as Number) else null,
+	PAF_ExtrasInstaladas__c: raw.ExtrasInstaladas,
+	PAF_MontoExtrasInstaladas__c: if (raw.MontoExtrasInstaladas != null and raw.MontoExtrasInstaladas != "") (raw.MontoExtrasInstaladas as Number) else null,
+	PAF_cabys__c: raw.cabys,
+	PAF_capacidadPasajero__c: if (raw.capacidadPasajero != null and raw.capacidadPasajero != "") (raw.capacidadPasajero as Number) else null,
+	PAF_combustible__c: if(raw.combustible != null) (upper(raw.combustible) match {
+		case "GASOLINA" -> "01"
+		case "DIESEL" -> "02"
+		case "ELECTRICIDAD Y GASOLINA ( HIBRIDO)" -> "03"
+		case "ELECTRICIDAD" -> "04"
+		case "GAS LPG" -> "05"
+		case "NO DEFINIDA" -> "ND"
+		else -> "ND"
+	}) else null,
+	//DrivetrainSystem: raw.traccion,
+	PAF_carroceria__c: raw.carroceria,
+	PAF_cilindraje__c: raw.cilindraje,
+	PAF_Cilindros__c: if (raw.cilindros != null and raw.cilindros != "") (raw.cilindros as Number) else null,
+	PAF_familia__c: raw.familia,
+	PAF_numeroAvaluo__c: raw.numeroAvaluo,
+	PAF_importado__c: if(typeOf(raw.importado) == Boolean) raw.importado else (if(raw.importado == "true" or raw.importado == "S") true else false),
+	PAF_electrico__c: if(typeOf(raw.electrico) == Boolean) raw.electrico else (if(raw.electrico == "true" or raw.electrico == "S") true else false),
+	PAF_preentregaMecanica__c: if(typeOf(raw.preentregaMecanica) == Boolean) raw.preentregaMecanica else (if(raw.preentregaMecanica == "true" or raw.preentregaMecanica == "S") true else false),
+	PAF_preentregaCarroceria__c: if(typeOf(raw.preentregaCarroceria) == Boolean) raw.preentregaCarroceria else (if(raw.preentregaCarroceria == "true" or raw.preentregaCarroceria == "S") true else false),
+	PAF_Reserva_Oportunidad__c: raw.Reserva_Oportunidad,
+	PAF_Reserva_Senal_Trato__c: raw.Reserva_Senal_Trato,
+	PAF_EstadoSF__c: raw.EstadoSF default raw.estadoSF,
+	PAF_Oculto__c: raw.Oculto,
+	PAF_Motivo_Bloqueo__c: raw.MotivoBloqueo,
+	PAF_Estado_Operativo__c: raw.estadoOperativo
+}]]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+				
+				<salesforce:update doc:name="Update Vehicle" doc:id="update-veh-sf" config-ref="Salesforce_Config" type="Vehicle"/>
+			</when>
+			
+			<otherwise >
+				<logger level="ERROR" doc:name="LOG - Vehiculo No Encontrado" message=">>> [UPDATEVEHICLE] Vehiculo no encontrado. Creando Log_API__c..." />
+				<set-variable variableName="failedIntegration" value="Update Vehicle" doc:name="Set Integration Name - Not Found" />
+				
+				<ee:transform doc:name="Map Log_API__c Payload">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+output application/java
+---
+[{
+//	"Sistema__c": "MuleSoft",
+	"Tipo_de_consulta__c": "Update Vehicle",
+	"Respuesta_Completa__c": write(vars.softlandPayload, 'application/json'),
+	"Mensaje_Error__c": "Vehículo no encontrado en Salesforce para actualizar. Unidad: " ++ (vars.softlandPayload.unidadTarjeta default "N/A"),
+	"Estado__c": "Error",
+	"OwnerId": vars.sfPayload.ejecutadoPor default vars.softlandPayload.ejecutadoPor default payload.data.ChangeEventHeader.commitUser default null,
+	"Fecha_Llamada_API__c": now()
+}]]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+				
+				<salesforce:create type="Log_API__c" doc:name="Create Log_API__c No Encontrado" config-ref="Salesforce_Config" />
+				<raise-error doc:name="Raise Error Not Found" type="APP:VEHICLE_NOT_FOUND" description="El vehículo no existe en Salesforce y no se permite su creación."/>
+			</otherwise>
+		</choice>
+		
+		<logger level="INFO" doc:name="LOG - Respuesta Salesforce" message="#['>>> [UPDATEVEHICLE] Respuesta SF: ' ++ write(payload, 'application/json')]" />
+
+		<!-- ============================================================
+		     2d. Success Response
+		     ============================================================ -->
+		<ee:transform doc:name="Success Response" doc:id="success-resp" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+{
+	"status": true,
+	"message": "Vehículo procesado exitosamente en Salesforce",
+	"salesforceResult": payload
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		
+		<!-- ============================================================
+		     2e. Error Handler
+		     ============================================================ -->
+		<error-handler>
+			<on-error-continue enableNotifications="true" logException="true" doc:name="On Error Continue - Invalid Status" type="APP:INVALID_STATUS">
+				<logger level="ERROR" doc:name="LOG - Error de Validacion" message="#['>>> [UPDATEVEHICLE] ❌ Error de validación: ' ++ error.description]" />
+				<ee:transform doc:name="Set Validation Error Response">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+	"status": false,
+	"message": "Error de validación de datos",
+	"errorDetail": error.description,
+	"integration": "Validacion Estado"
+}]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+			</on-error-continue>
+
+			<on-error-continue enableNotifications="true" logException="true" doc:name="On Error Continue - Connectivity" type="CONNECTIVITY, TIMEOUT, SALESFORCE:CONNECTIVITY">
+				<logger level="ERROR" doc:name="LOG - Error de conectividad" message="#['>>> [UPDATEVEHICLE] ❌ Error de conectividad con SFDC. Encolando registro para reintento. | Error: ' ++ error.description]" />
+				
+				<vm:publish config-ref="VM_Config" queueName="vehicle-retry-queue" sendCorrelationId="ALWAYS" doc:name="Publish to Retry Queue">
+					<vm:content><![CDATA[#[vars.softlandPayload]]]></vm:content>
+				</vm:publish>
+
+				<ee:transform doc:name="Set Queued Response">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+	"status": false,
+	"message": "Error de conectividad temporal. El registro fue encolado para procesamiento posterior.",
+	"errorDetail": error.description,
+	"integration": vars.failedIntegration default "N/A"
+}]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+			</on-error-continue>
+
+			<on-error-propagate enableNotifications="true" logException="true" doc:name="On Error Propagate" type="ANY">
+				<logger level="ERROR" doc:name="LOG - Error general" message="#['>>> [UPDATEVEHICLE] ❌ Error en integracion: ' ++ (vars.failedIntegration default 'Desconocida') ++ ' | Error: ' ++ error.description]" />
+				<ee:transform doc:name="Set Error Response">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+	"status": false,
+	"message": "Error al procesar vehículo en Salesforce",
+	"errorDetail": error.description,
+	"integration": vars.failedIntegration default "N/A"
+}]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+			</on-error-propagate>
+		</error-handler>
+	</flow>
+
+	<!-- ============================================================
+	     3. Retry Flow (triggered by VM listener)
+	     ============================================================ -->
+	<flow name="paf-createvehicle-retry-flow" doc:id="retry-flow-001" >
+		<vm:listener config-ref="VM_Config" queueName="vehicle-retry-queue" numberOfConsumers="1" doc:name="Listener Retry Queue"/>
+		
+		<logger level="INFO" doc:name="LOG - Procesando reintento" message="#['>>> [RETRY] Iniciando reintento para unidad: ' ++ (payload.pUnidad default 'N/A')]" />
+
+		<ee:transform doc:name="Save Softland Payload" doc:id="retry-save-payload" >
+			<ee:message >
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="softlandPayload" ><![CDATA[%dw 2.0
+output application/json
+---
+payload]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+
+		<salesforce:query doc:name="Query Existing Vehicle" doc:id="retry-query-veh" config-ref="Salesforce_Config" target="existingVehicles">
+			<salesforce:salesforce-query ><![CDATA[SELECT Id FROM Vehicle WHERE VehicleIdentificationNumber = ':unidad' LIMIT 1]]></salesforce:salesforce-query>
+			<salesforce:parameters ><![CDATA[#[output application/java
+---
+{
+	"unidad" : vars.softlandPayload.unidadTarjeta
+}]]]></salesforce:parameters>
+		</salesforce:query>
+
+		<choice doc:name="Exists?" doc:id="retry-choice-veh" >
+			<when expression="#[sizeOf(vars.existingVehicles default []) &gt; 0]">
+				<logger level="INFO" doc:name="LOG - Vehiculo Encontrado en reintento" message="#['>>> [RETRY] Vehiculo encontrado en SF. Actualizando recordId: ' ++ vars.existingVehicles[0].Id]" />
+				
+				<ee:transform doc:name="Map Update Payload" doc:id="retry-map-update">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+output application/java
+var raw = vars.softlandPayload
+---
+[{
+	Id: vars.existingVehicles[0].Id,
+	Name: raw.nombreProducto default raw.unidadTarjeta,
+	ChassisNumber: raw.vinChasis,
+	EngineNumber: raw.motor,
+	ExteriorColor: raw.colorExterno,
+	InteriorColor: raw.colorInterno,
+	LastOdometerReading: if (raw.odometro != null and raw.odometro != "") (raw.odometro as Number) else null,
+	CylinderCount: if (raw.cilindros != null and raw.cilindros != "") (raw.cilindros as String) else null,
+	GearBoxType: if(raw.transmision != null) (upper(raw.transmision) match {
+		case "A" -> "Automatica"
+		case "M" -> "Manual"
+		else -> raw.transmision
+	}) else null,
+	PAF_Fecha_Llegada_Real__c: if (raw.fechaLlegadaReal != null and raw.fechaLlegadaReal != "") (raw.fechaLlegadaReal as Date) else null,
+	PAF_Fecha_Llegada_Estimada__c: if (raw.fechaLlegada != null and raw.fechaLlegada != "") (raw.fechaLlegada as Date) else null,
+	PAF_Fecha_puerta__c: do {
+		var f = raw.fechaDesalmacenaje default raw.fechaPuerta default raw.fecha_puerta
+		---
+		if (f != null and trim(f as String) != "") (
+			if (sizeOf(f as String) >= 10) (f as String)[0 to 9] as Date else (f as Date)
+		) else null
+	},
+	
+	// Nuevos Mapeos
+	PAF_unidadTarjeta__c: raw.unidadTarjeta,
+	PAF_tipo_vehiculo__c: raw.tipoVehiculo,
+	//MakeName: raw.marca,
+	PAF_Subtipo_de_Vehiculo__c: raw.subTipoVehiculo,
+	VehicleRegistrationNumber: raw.placa,
+	// ModelYear eliminado porque es de solo lectura en Salesforce
+	FST_TransmissionType__c: if(raw.transmision != null) (upper(raw.transmision) match {
+		case "A" -> "Automatica"
+		case "M" -> "Manual"
+		else -> raw.transmision
+	}) else null,
+	PAF_estado_unidades__c: raw.pEstado default raw.estado,
+	PAF_precio__c: if (raw.precio != null and raw.precio != "") (raw.precio as Number) else null,
+	PAF_preiciosinIVA__c: if (raw.preciosinIVA != null and raw.preciosinIVA != "") (raw.preciosinIVA as Number) else null,
+	PAF_precioPromocional__c: if (raw.precioPromocional != null and raw.precioPromocional != "") (raw.precioPromocional as Number) else null,
+	PAF_costo__c: if (raw.costo != null and raw.costo != "") (raw.costo as Number) else null,
+	PAF_sucursal__c: raw.sucursal,
+	PAF_ubicacion__c: raw.ubicacion,
+	PAF_vendedorRecibe__c: raw.vendedorRecibe,
+	PAF_fechaRegistro__c: if (raw.fechaRegistro != null and raw.fechaRegistro != "") (raw.fechaRegistro as Date) else null,
+	PAF_fechaLlegada__c: if (raw.fechaLlegada != null and raw.fechaLlegada != "") (raw.fechaLlegada as Date) else null,
+	PAF_codigoTipoPedido__c: raw.codigoTipoPedido,
+	PAF_descripTipoPedido__c: raw.descripTipoPedido,
+	PAF_extrasPedido__c: raw.extrasPedido,
+	PAF_costoExtrasPedido__c: if (raw.costoExtrasPedido != null and raw.costoExtrasPedido != "") (raw.costoExtrasPedido as Number) else null,
+	PAF_ExtrasInstaladas__c: raw.ExtrasInstaladas,
+	PAF_MontoExtrasInstaladas__c: if (raw.MontoExtrasInstaladas != null and raw.MontoExtrasInstaladas != "") (raw.MontoExtrasInstaladas as Number) else null,
+	PAF_cabys__c: raw.cabys,
+	PAF_capacidadPasajero__c: if (raw.capacidadPasajero != null and raw.capacidadPasajero != "") (raw.capacidadPasajero as Number) else null,
+	PAF_combustible__c: if(raw.combustible != null) (upper(raw.combustible) match {
+		case "GASOLINA" -> "01"
+		case "DIESEL" -> "02"
+		case "ELECTRICIDAD Y GASOLINA ( HIBRIDO)" -> "03"
+		case "ELECTRICIDAD" -> "04"
+		case "GAS LPG" -> "05"
+		case "NO DEFINIDA" -> "ND"
+		else -> "ND"
+	}) else null,
+	//DrivetrainSystem: raw.traccion,
+	PAF_carroceria__c: raw.carroceria,
+	PAF_cilindraje__c: raw.cilindraje,
+	PAF_Cilindros__c: if (raw.cilindros != null and raw.cilindros != "") (raw.cilindros as Number) else null,
+	PAF_familia__c: raw.familia,
+	PAF_numeroAvaluo__c: raw.numeroAvaluo,
+	PAF_importado__c: if(typeOf(raw.importado) == Boolean) raw.importado else (if(raw.importado == "true" or raw.importado == "S") true else false),
+	PAF_electrico__c: if(typeOf(raw.electrico) == Boolean) raw.electrico else (if(raw.electrico == "true" or raw.electrico == "S") true else false),
+	PAF_preentregaMecanica__c: if(typeOf(raw.preentregaMecanica) == Boolean) raw.preentregaMecanica else (if(raw.preentregaMecanica == "true" or raw.preentregaMecanica == "S") true else false),
+	PAF_preentregaCarroceria__c: if(typeOf(raw.preentregaCarroceria) == Boolean) raw.preentregaCarroceria else (if(raw.preentregaCarroceria == "true" or raw.preentregaCarroceria == "S") true else false),
+	PAF_Reserva_Oportunidad__c: raw.Reserva_Oportunidad,
+	PAF_Reserva_Senal_Trato__c: raw.Reserva_Senal_Trato,
+	PAF_EstadoSF__c: raw.EstadoSF default raw.estadoSF,
+	PAF_Oculto__c: raw.Oculto,
+	PAF_Motivo_Bloqueo__c: raw.MotivoBloqueo,
+	PAF_Estado_Operativo__c: raw.estadoOperativo
+}]]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+				
+				<salesforce:update doc:name="Update Vehicle" doc:id="retry-update-veh" config-ref="Salesforce_Config" type="Vehicle"/>
+			</when>
+			
+			<otherwise >
+				<logger level="ERROR" doc:name="LOG - Vehiculo No Encontrado en reintento" message=">>> [RETRY] Vehiculo no encontrado. Creando Log_API__c..." />
+				
+				<ee:transform doc:name="Map Log_API__c Payload Retry">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+output application/java
+---
+[{
+	"Sistema__c": "MuleSoft",
+	"Operacion__c": "Update Vehicle Retry",
+	"Status__c": "Error",
+	"Endpoint__c": "VM Queue",
+	"Payload__c": write(vars.softlandPayload, 'application/json'),
+	"Mensaje_Error__c": "Vehículo no encontrado en Salesforce para actualizar en reintento. Unidad: " ++ (vars.softlandPayload.unidadTarjeta default "N/A"),
+	"Tipo_de_consulta__c": "paf-updatevehicle / paf-createvehicle-retry-flow",
+	"Estado__c": "Error",
+	"OwnerId": vars.sfPayload.ejecutadoPor default vars.softlandPayload.ejecutadoPor default payload.data.ChangeEventHeader.commitUser default null,
+	"Fecha_Llamada_API__c": now()
+}]]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+				
+				<salesforce:create type="Log_API__c" doc:name="Create Log_API__c No Encontrado Retry" config-ref="Salesforce_Config" />
+				<raise-error doc:name="Raise Error Not Found Retry" type="APP:VEHICLE_NOT_FOUND" description="El vehículo no existe en Salesforce y no se permite su creación."/>
+			</otherwise>
+		</choice>
+
+		<logger level="INFO" doc:name="LOG - Reintento exitoso" message="#['>>> [RETRY] Sincronización completada exitosamente para unidad: ' ++ (vars.softlandPayload.pUnidad default 'N/A')]" />
+
+		<error-handler>
+			<!-- If connectivity error, propagate error so VM rolls back message to retry later -->
+			<on-error-propagate enableNotifications="true" logException="true" doc:name="On Error Propagate - Connectivity Retry" type="CONNECTIVITY, TIMEOUT, SALESFORCE:CONNECTIVITY">
+				<logger level="ERROR" doc:name="LOG - Error Conectividad Reintento" message=">>> [RETRY] ❌ Error de conectividad temporal en reintento. Rolland back message to queue." />
+			</on-error-propagate>
+			
+			<!-- If permanent/validation error, consume message so we don't loop forever -->
+			<on-error-continue enableNotifications="true" logException="true" doc:name="On Error Continue - Permanent Retry Fail" type="ANY">
+				<logger level="ERROR" doc:name="LOG - Error Permanente Reintento" message="#['>>> [RETRY] ❌ Error permanente en reintento. Descartando mensaje de la cola. Detalle: ' ++ error.description]" />
+			</on-error-continue>
+		</error-handler>
+	</flow>
+</mule>

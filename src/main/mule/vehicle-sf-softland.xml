@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd">
+
+	<flow name="vehicle-sf-softland-outbound-flow" doc:id="outbound-veh-sf-001">
+		<salesforce:replay-channel-listener doc:name="Replay channel listener" doc:id="replay-event-001" config-ref="Salesforce_Config" streamingChannel="/event/PAF_Vehicle_Inventory_Update__e" replayOption="ONLY_NEW"/>
+		
+		<logger level="INFO" doc:name="Log Event Received" message="#['>>> [OUTBOUND] Evento PAF_Vehicle_Inventory_Update__e recibido: ' ++ write(payload, 'application/json')]" />
+		
+		<ee:transform doc:name="Save SF Payload" doc:id="sf-payload-001">
+			<ee:message>
+			</ee:message>
+			<ee:variables>
+				<ee:set-variable variableName="sfPayload"><![CDATA[%dw 2.0
+output application/json
+---
+payload.data.payload]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		
+		<set-variable variableName="company" value="#[if (['01', 'toyota', 'Toyota', '02', 'daiatsu', '03', 'hino', '04', 'lexus', '11', 'subaru'] contains lower(trim(vars.sfPayload.Marca__c as String))) 'PURDY' else 'AUTO']" doc:name="Set Company" />
+		
+		<logger level="INFO" doc:name="Log Company" message="#['>>> [OUTBOUND] Compañía determinada: ' ++ vars.company]" />
+
+		<!-- Obtener Token -->
+		<flow-ref doc:name="Call Softland Login" name="subflow-softland-login"/>
+
+		<!-- Mapear JSON para Softland -->
+		<ee:transform doc:name="Map Softland VehicleUpdate Payload" doc:id="map-outbound-001">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+	"unidadTarjeta": vars.sfPayload.PAF_Unidad_Tarjeta__c default vars.sfPayload.N_Unidad__c default "",
+	"estado": vars.sfPayload.PAF_estado_unidades__c default "",
+	"ESTADOSF": vars.sfPayload.PAF_Estado_SF__c default "",
+	"ESTADO_OP": vars.sfPayload.PAF_estado_operativo__c default "",
+	"OCULTO": if(vars.sfPayload.PAF_Oculto__c == true) 1 else 0,
+	"MOTIVO_BLOQUEO": vars.sfPayload.PAF_Motivo_Bloqueo__c default ""
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		
+		<logger level="INFO" doc:name="Log Complete Request" message="#[output text/plain --- '\n=== REQUEST A SOFTLAND (VEHICLE UPDATE) ===\nEndpoint: PUT /api/vehicles/FabricOrders/VehicleUpdate?company=' ++ (vars.company default '') ++ '\nHeaders: {\n  Authorization: Bearer [HIDDEN]\n  Content-Type: application/json\n}\nBody:\n' ++ write(payload, 'application/json', {indent: true}) ++ '\n===========================================']" />
+		
+		<until-successful maxRetries="3" doc:name="Until Successful" millisBetweenRetries="5000">
+			<http:request method="PUT" doc:name="PUT VehicleUpdate Softland" config-ref="Softland_HTTP_Request_configuration" path="/api/vehicles/FabricOrders/VehicleUpdate">
+				<http:headers ><![CDATA[#[output application/java
+---
+{
+	"Authorization" : "Bearer " ++ vars.softlandToken,
+	"Content-Type" : "application/json"
+}]]]></http:headers>
+				<http:query-params ><![CDATA[#[output application/java
+---
+{
+	"company" : vars.company
+}]]]></http:query-params>
+			</http:request>
+		</until-successful>
+		
+		<logger level="INFO" doc:name="Log Complete Response" message="#[output text/plain --- '\n=== RESPONSE DE SOFTLAND (VEHICLE UPDATE) ===\nStatus: Exitoso\nBody:\n' ++ write(payload, 'application/json', {indent: true}) ++ '\n=============================================']" />
+		
+		<error-handler >
+			<on-error-continue enableNotifications="true" logException="true" doc:name="On Error Continue" type="ANY">
+				<logger level="ERROR" doc:name="Log Error" message="#['>>> [OUTBOUND] Error actualizando Softland tras 3 reintentos: ' ++ error.description]" />
+				
+				<ee:transform doc:name="Map Log_API__c" doc:id="map-error-log">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+output application/java
+---
+[{
+	"Tipo_de_consulta__c": "VehicleOutbound Softland",
+	"Respuesta_Completa__c": write(vars.sfPayload, 'application/json'),
+	"Mensaje_Error__c": "Error conectando con Softland: " ++ (error.description default "Unknown Error"),
+	"Estado__c": "Error",
+	"OwnerId": vars.sfPayload.CreatedById default null,
+	"Fecha_Llamada_API__c": now()
+}]]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+				
+				<salesforce:create type="Log_API__c" doc:name="Create Log_API__c" config-ref="Salesforce_Config" />
+			</on-error-continue>
+		</error-handler>
+	</flow>
+</mule>
